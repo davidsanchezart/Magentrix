@@ -1,12 +1,11 @@
 <aspx:AspxPage runat="server" Id="NewPartnerEmployeePage" title="<%#CustomLabels.Registration_FormLabel%>">
 <body>
     <div class="container">
-        <div class="row">
-            <aspx:ViewMessages Runat="server" />
+        <aspx:ViewMessages Runat="server" />
             <div class="max700 registration panel panel-default">
                 <div class="registrationForm">
                     <div class="form-heading panel-heading">
-                        <h3><%:CustomLabels.Registration_ProvideInformationLabel%>:</h3>
+                        <h3><%:CustomLabels.Registration_ProvideInformationLabel%></h3>
                     </div>
                     <div class="form-layout panel-body tabPanel">
                         <div class="create-contact" runat="server" visible="<%# !Bool(DataBag.CreateLeads)%>">
@@ -21,7 +20,6 @@
                 <div class="form-button panel-footer right">
                     <button id="btnRegSubmit" type="button" class="btn btn-primary btn-lg"><%:Resources.Global.Submit%></button>
                 </div>
-            </div>
         </div>
     </div>
     <input type="hidden" id="createLead" name="createLead" value='<%# Bool(DataBag.CreateLeads) %>'/>
