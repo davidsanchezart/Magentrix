@@ -1,0 +1,26 @@
+public class WikiTestController : AspxController
+{
+	public override ActionResponse Index()
+	{
+
+	    var wikiCategories = Database.Query<WikiCategory>()
+            .Select(f => new { f.Id, f.Name })
+            .ToListAsAdmin();
+        
+            
+                    
+        var output = new List<string>();
+        
+        // Loop through each category and format the output
+        foreach (var category in wikiCategories)
+        {
+            // Add the formatted string (tab-separated or comma-separated) to the output list
+            output.Add($"{category.Id}\t{category.Name}");
+        }
+        
+        SystemInfo.Error(JsonHelper.ToJson(output));
+
+
+		return View();
+	}
+}

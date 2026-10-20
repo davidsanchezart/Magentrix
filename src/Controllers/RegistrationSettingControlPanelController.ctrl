@@ -1,0 +1,73 @@
+[SerializeViewData]
+public class RegistrationSettingControlPanelController : AspxController
+{
+	public override ActionResponse Index()
+	{
+	    var regSetting = RegistrationSetting.Load();
+	    
+	    List<string> emailTemplateIds = new List<string>();
+	    
+	    emailTemplateIds.Add(regSetting.AdministratorLeadEmailTemplateId);
+	    emailTemplateIds.Add(regSetting.AdministratorContactEmailTemplateId);
+	    emailTemplateIds.Add(regSetting.ConfirmationEmailTemplateId);
+	    
+	    if (emailTemplateIds.Count > 0)
+	    {
+	        var templates = Database.Query<EmailTemplate>()
+               .Where(f => emailTemplateIds.Contains(f.Id))
+               .Select(f => new { f.Id, f.Name })
+               .ToListAsAdmin();
+               
+            if (!IsEmpty(regSetting.AdministratorLeadEmailTemplateId))
+            {   
+                regSetting.AdministratorLeadEmailTemplate = templates.Where(f => f.Id == regSetting.AdministratorLeadEmailTemplateId).FirstOrDefault();
+            }
+            if (!IsEmpty(regSetting.AdministratorContactEmailTemplateId))
+            {   
+                regSetting.AdministratorContactEmailTemplate = templates.Where(f => f.Id == regSetting.AdministratorContactEmailTemplateId).FirstOrDefault();
+            }
+            if (!IsEmpty(regSetting.ConfirmationEmailTemplateId))
+            {   
+                regSetting.ConfirmationEmailTemplate = templates.Where(f => f.Id == regSetting.ConfirmationEmailTemplateId).FirstOrDefault();
+            }
+           
+	    }
+	    
+		LoadLeadSourceField();
+
+		return View(regSetting);
+	}
+	
+	[HttpPost]
+	public ActionResponse save(RegistrationSetting setting)
+	{
+	    if (!ModelState.IsValid) 
+	        return View(ActivePages.RegistrationSettingControlPanel,setting);
+
+	    try
+	    {
+	        CustomSetting.Save(setting);
+	        
+	        return Redirect (ActivePages.Admin);
+	    }
+	    catch(DatabaseException ex)
+	    {
+	        UpdateModelState(ex);
+	        SystemInfo.Debug("Error: RegistrationSettingControlPanelController - setting changes not saved. {0}", ex.Message);
+	        return View(ActivePages.RegistrationSettingControlPanel, setting);
+	    }
+	}
+	
+	private void LoadLeadSourceField()
+	{
+	    var mode = RegistrationSetting.GetPortalMode();
+	    string picklist = "Lead.LeadSource";
+	    
+	    if (mode=="force")
+	    {
+	        picklist = "Force__Lead.LeadSource";
+	    }
+	    
+	    DataBag.LeadSourcePicklist = picklist;
+	}	
+}

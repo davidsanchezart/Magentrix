@@ -1,0 +1,89 @@
+public class AdminController : AspxController
+{
+	public override ActionResponse Index()
+	{
+        var packageLinkNames = GetData();
+        
+        if (!packageLinkNames.Any())
+            return View();
+        
+	    var activePageExists = Database.Query<ActivePage>()
+                                .Where(a => packageLinkNames.Contains(a.Name.ToLower()))
+                                .Select(a => new { a.Name })
+                                .ToListAsAdmin();
+                                
+        if (!activePageExists.Any())
+            return View();
+
+        foreach (var activePageExist in activePageExists)
+        {
+            if (activePageExist.Name.ToLower() == "articlesyncsetting")
+                DataBag.ShowArticleSyncSettingPage = true;
+                
+            if (activePageExist.Name.ToLower() == "usergroupsegmentationrulesettings")
+                DataBag.ShowUserGroupsegmentationRuleSettingPage = true;
+                
+            if (activePageExist.Name.ToLower() == "mdfsettings")
+                DataBag.ShowMdfSettingsPage = true;
+                
+            if (activePageExist.Name.ToLower() == "opportunityaddproductssetting")
+                DataBag.ShowOpportunityAddProductsSettingPage = true;
+                
+            if (activePageExist.Name.ToLower() == "registrationsettingcontrolpanel")
+                DataBag.ShowRegistrationSettingControlPanelSettingPage = true;
+                
+            if (activePageExist.Name.ToLower() == "manageteamsettings")
+                DataBag.ShowManageTeamSettingPage = true;
+        }
+
+		return View();
+	}
+	
+	private List<string> GetData()
+    {
+        // get portal schema (dynamicscrm, force, standard)
+        var keyEntityNames = EntityContext.GetKeyEntityNames();
+        var accountEntityName = keyEntityNames["Account"];
+        var accountEntity = EntityContext.GetFromExpression(accountEntityName);
+        string schema = (accountEntity.Schema??"").ToLowerInvariant();
+        
+        // list for package links
+        var packageLinkNames = new List<string>();
+        
+        // display entity panels depending on schema
+        if (schema == "dynamicscrm")
+        {
+            packageLinkNames = new List<string> {
+                "usergroupsegmentationrulesettings"
+            };        
+            
+            DataBag.ShowDynamicsEntityPanel = true;
+        }
+        else if (schema == "force")
+        {
+            packageLinkNames = new List<string> {
+                "articlesyncsetting", 
+                "mdfsettings", 
+                "opportunityaddproductssetting", 
+                "registrationsettingcontrolpanel", 
+                "manageteamsettings"
+            };
+            
+            DataBag.ShowSalesforceEntityPanel = true;
+        }
+        else if (schema == "standard")
+        {
+            packageLinkNames = new List<string> {
+                "usergroupsegmentationrulesettings", 
+                "mdfsettings", 
+                "opportunityaddproductssetting", 
+                "registrationsettingcontrolpanel", 
+                "manageteamsettings"
+            };
+            
+            DataBag.ShowStandardEntityPanel = true;    
+        }
+        
+        return packageLinkNames;
+    }
+}

@@ -1,0 +1,70 @@
+public class RegistrationDefaultManager {
+    public virtual List<Account> GetAccountsByEmail(string domain)
+    {
+        //TODO: if possible limit the account to only partner account for PRM. e.g: && f.Account.Active == true
+        var contacts = Database.Query<Contact>()
+                       .Select(f=> new { f.AccountId })
+                       .Where(f => f.Email.EndsWith("@" + domain) && !string.IsNullOrEmpty(f.AccountId) )
+                        .ToListAsAdmin();
+        
+        var accountIds = new List<string>();
+        
+        foreach(var contact in contacts)
+            accountIds.Add(contact.AccountId);
+            
+        var matchingAccounts = new List<Account>();
+            
+        matchingAccounts = Database.Query<Account>()
+                                .Where(f=> accountIds.Contains(f.Id))
+                                .Select(f=> new { f.Id, f.Name, f.BillingCity, f.BillingCountry, f.BillingState, f.BillingStreet, f.BillingPostalCode })
+                                .OrderBy(f => f.Name)
+                                .ToListAsAdmin();
+        
+        if (matchingAccounts.Count == 0)
+        {
+            matchingAccounts = Database.Query<Account>()
+                                .Select(f=> new { f.Id, f.Name, f.BillingCity, f.BillingCountry, f.BillingState, f.BillingStreet, f.BillingPostalCode })
+                                .Where(f => f.Website.EndsWith("." + domain) || f.Website == domain || f.Website == domain + "/" || f.Website.EndsWith("//" + domain) || f.Website.Contains("//" + domain + "/") || f.Website.Contains("//www." + domain + "/")) 
+                                .OrderBy(f => f.Name)
+                                .ToListAsAdmin();
+        }
+        
+        matchingAccounts = matchingAccounts.Distinct(f=>f.Id).OrderBy(f => f.Name).ToList();
+ 
+        return matchingAccounts;
+    }
+    
+    public virtual List<Contact> GetContact(string Email)
+	{
+	    //TODO: if possible limit the contact to only partner account for PRM. e.g: && f.Account.Active == true
+	    var contacts = Database.Query<Contact>()
+                      .Select(f=> new { f.AccountId })
+                      .Where(f => f.Email == Email && !string.IsNullOrEmpty(f.AccountId))
+                      .Include(r => r.Account, f => new { f.Id, f.Name, f.BillingCity, f.BillingCountry, f.BillingState, f.BillingStreet, f.BillingPostalCode })
+                      .OrderBy(f => f.Account.Name)
+                      .ToListAsAdmin();
+                      
+        return contacts;
+	}
+    
+    //Override this method if you wish to have more control over what role is assigned to the new user based on their Account settings. The method needs to return Role Name.
+	public virtual string GetUserRole(Account account)
+	{
+        string roleId = SystemInfo.Company.DefaultRole?.Id;
+        // string roleId = "";
+        
+        // if (IsEmpty(roleName))
+        // {
+        //     roleId = SystemInfo.Company.DefaultRoleId;
+        //     var role = Database.Query<Role>().Where(f => f.Id == roleId).Select(f => new { f.Id, f.Name }).FirstAsAdmin();
+        //     roleName = role?.Name;
+        // }
+        
+	    return roleId;
+	}
+	
+	public RegistrationSetting GetSettings()
+	{
+	    return CustomSetting.GetInstance<RegistrationSetting>("default", true);
+	}
+}

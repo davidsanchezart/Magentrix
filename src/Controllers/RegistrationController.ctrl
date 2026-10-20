@@ -1,0 +1,491 @@
+[MasterName("Public")]
+[SerializeViewData]
+public class RegistrationController : AspxController
+{
+	public override ActionResponse Index()
+	{
+		return View(ActivePages.Registration);
+	}
+	
+	[HttpPost]
+	public ActionResponse ValidateEmail(string partnerEmail)
+	{
+	    partnerEmail = partnerEmail.Trim();
+	    bool isValidEmail = EmailAttribute.IsValidEmail(partnerEmail);
+        if(isValidEmail)
+        {
+            DataBag.Email = partnerEmail;
+             //check to see if there is already a user with this username:
+            var users = Database.Query<User>().Where(f=>f.Username==partnerEmail).ToListAsAdmin();
+            if (users.Where(f=>f.IsActive==true).Count()>0)
+            {
+                string message = CustomLabels.Registration_ForgotPasswordMsg?? "";
+                string title = CustomLabels.Registration_ErrorMsgTitle?? "";
+                
+                DataBag.ButtonLabel = CustomLabels.Registration_ForgotPasswordBtnLabel?? "";
+                SetReturnUrl("/user/forgotpassword");
+                
+                return View("Message", new { Title=title, Message=message });
+            }
+            
+            //user exists but it is de-activated
+            if (users.Count()>0 && users.Where(f=>f.IsActive!=true).Count()>0)
+            {
+                DataBag.ButtonLabel = CustomLabels.Registration_ReturnToHome?? "";
+                SetReturnUrl("/");
+                
+                string message = CustomLabels.Registration_DeActivatedUserMsg?? "";
+                string title = CustomLabels.Registration_ErrorMsgTitle?? "";
+                
+                return View("Message", new { Title=title, Message=message });
+            }
+            
+            var regManager = GetRegistrationManager();
+            var regManagerSettings = regManager.GetSettings();
+            DataBag.CreateLeads = regManagerSettings.AlwaysCreateLeads;
+            
+            // check if there is only one contact based on the email provided & query contact 
+            if (regManagerSettings.CheckContactByEmail)
+            {
+                ContactResponseObject contactResponseObject  = GetContact(partnerEmail, regManager);
+
+                if(contactResponseObject.Success)
+                {
+                    string accountId = contactResponseObject.Contact.AccountId;
+                    return SignupExistingContact(partnerEmail, accountId);
+                }
+            }
+            
+            // check if show the account ist or not 
+            if (!regManagerSettings.ShowAccountList)
+            {
+                var model = new Lead {
+                    Email = partnerEmail 
+                }; 
+                return View(ActivePages.RegistrationNewMember, model);
+            }
+            
+            ResponseObject responseObject = GetAccounts(partnerEmail,regManager);
+            var matchingAccounts = responseObject.Accounts;
+            
+            if (responseObject.Success && matchingAccounts.Count > 0)
+            {
+                DataBag.ShowOptions = true;
+                return View(ActivePages.Registration, matchingAccounts);
+            }
+            else if (responseObject.Success && matchingAccounts.Count == 0)
+            {
+        	    var model = new Lead {
+                    Email = partnerEmail 
+                }; 
+                return View(ActivePages.RegistrationNewMember, model);
+            }
+            else if(!responseObject.Success)
+            {
+                string message = CustomLabels.Registration_WorkEmailAddress?? "";
+                AddPageMessage(message, MessageType.Warning);
+                return View(ActivePages.Registration);
+            }
+        }
+        else
+        {
+            string message = CustomLabels.Registration_ValidCompanyEmail?? "";
+            AddPageMessage(message, MessageType.Warning);
+            return View(ActivePages.Registration);
+        }
+        
+        return View(ActivePages.Registration);
+	}
+	
+	[HttpPost]
+	public ActionResponse SignupNewMember(string dbpartnerEmail)
+	{
+	    var model = new Lead {
+            Email = dbpartnerEmail,    
+        };
+        return View(ActivePages.RegistrationNewMember, model);
+	}
+	
+	[HttpPost]
+	public ActionResponse SubmitSignupNewMember(Lead model)
+	{
+	     if (!ModelState.IsValid) 
+	        return View(ActivePages.RegistrationNewMember,model);
+	        
+	    try
+	    {
+	        var regManager = GetRegistrationManager();
+	        var regManagerSettings = regManager.GetSettings();
+	        
+	        model.ReviewStatus = "Submitted";
+    	    model.LeadSource = regManagerSettings.LeadSource;
+    	    
+            Create(model, new { SystemMode=true });
+            
+            SendEmail(model, regManagerSettings);
+            SendEmailToUser(model.Email, regManagerSettings);
+            
+            return Redirect("/aspx/registration/thankyou");
+	    }
+	    catch(DatabaseException ex)
+        {
+            UpdateModelState(ex);
+            LogModelStateErrors();
+            return View(ActivePages.RegistrationNewMember, model);
+        }
+	}
+	
+	[HttpPost]
+	public ActionResponse SignupExistingContact(string dbpartnerEmail, string partnerAccountId)
+	{
+        var regManager = GetRegistrationManager();
+        var regManagerSettings = regManager.GetSettings();
+
+	    var accountSelected = Database.Query<Account>()
+              .Where(f => f.Id == partnerAccountId)
+              .Select(f => new { f.Id, f.Name, f.Type, f.BillingStreet, f.BillingCity, f.BillingCountry, f.BillingState, f.BillingPostalCode })
+              .FirstAsAdmin();	 
+
+	    if (IsEmpty(partnerAccountId) && accountSelected != null) 
+	        return RedirectToError(CustomLabels.Registration_ErrorUnableToFoundAccount?? "");
+	   
+	    var roleId = regManager.GetUserRole(accountSelected);
+	    
+	    // Check for existing contacts if it is set in the setting
+	    if (regManagerSettings.CheckContactByEmail)
+        {
+    	    var contacts = Database.Query<Contact>()
+    	                           .Where(f => f.AccountId == partnerAccountId && f.Email == dbpartnerEmail)
+    	                           .ToListAsAdmin();
+    	                           
+            if (contacts.Count==1)
+            {
+                var contact = contacts[0];
+                var user = new User{
+                    Firstname = contact.Firstname, 
+                    Lastname = contact.Lastname,
+                    Username = contact.Email,
+                    RoleId = roleId,
+                    Email = contact.Email.Trim(),
+                    ContactId = contact.Id,
+                    AccountId = contact.AccountId,
+                    IsActive = true
+                };
+                try
+                {
+                    Create(user, new { SystemMode = true });
+                }
+                catch(DatabaseException ex)
+                {
+                    SystemInfo.Debug("Error in creating a new user for an existing contact {0}: {1}", contact.Id, ex.Message);
+                    return RedirectToError(CustomLabels.Registration_ErrorEnablingUser?? "");
+                }
+                
+                DataBag.ButtonLabel = CustomLabels.Registration_ReturnToHome?? "";
+                SetReturnUrl("/");
+                
+                string message = CustomLabels.Registration_ConfirmationMsg?? "";
+                string title = CustomLabels.Registration_ConfirmationMsgTtile?? "";
+                
+                return View("Message", new { Title=title, Message=message });
+            }
+        }
+        
+        // create lead for existing contact
+	    if (regManagerSettings.AlwaysCreateLeads)
+        {
+            var newLead = new Lead {
+                Company = accountSelected.Name,
+                Email = dbpartnerEmail, 
+                Phone = accountSelected.Phone,
+                PartnerAccountId = partnerAccountId, 
+                Street = accountSelected.BillingStreet,
+                City = accountSelected.BillingCity,
+                PostalCode = accountSelected.BillingPostalCode,
+                State = accountSelected.BillingState,
+                Country = accountSelected.BillingCountry,
+                LeadSource = regManagerSettings.LeadSource
+
+            };
+            
+            return View(ActivePages.RegistrationExistingContact, newLead);
+        }
+        
+        
+        // create contact
+	    var newContact = new Contact {
+	        Email = dbpartnerEmail, 
+	        AccountId = partnerAccountId, 
+            MailingStreet = accountSelected.BillingStreet,
+	        MailingCity = accountSelected.BillingCity,
+	        MailingPostalCode = accountSelected.BillingPostalCode,
+	        MailingState = accountSelected.BillingState,
+	        MailingCountry = accountSelected.BillingCountry
+	    };
+
+        return View(ActivePages.RegistrationExistingContact, newContact);
+	}
+	
+	[HttpPost]
+	public ActionResponse SubmitSignupExistingContant(Contact model)
+	{
+	    if (!ModelState.IsValid) 
+	        return View(ActivePages.RegistrationExistingContact,model);
+	    try
+	    {
+	        Create(model, new { SystemMode = true });
+	        
+	    }
+	    catch(DatabaseException ex)
+	    {
+	        UpdateModelState(ex);
+	        SystemInfo.Debug("Error: SubmitSignupExistingContant - Contact cannot be created. {0}", ex.Message);
+	        return View(ActivePages.RegistrationExistingContact, model);
+	    }
+	    
+	    var accountSelected = Database.Query<Account>()
+              .Where(f => f.Id == model.AccountId)
+              .Select(f => new { f.Id, f.Name, f.Type, f.BillingStreet, f.BillingCity, f.BillingCountry, f.BillingState, f.BillingPostalCode })
+              .FirstAsAdmin();
+	    
+	    var regManager = GetRegistrationManager();
+	    var regManagerSettings = regManager.GetSettings();
+	    var roleId = regManager.GetUserRole(accountSelected);
+	    
+        var user = new User{
+            Firstname = model.Firstname, 
+            Lastname = model.Lastname,
+            Username = model.Email,
+            RoleId = roleId,
+            Email = model.Email.Trim(),
+            ContactId = model.Id,
+            AccountId = model.AccountId,
+            IsActive = true
+        };
+	    
+	    try
+        {
+            Create(user, new { SystemMode = true });
+            
+            SendEmail(model, regManagerSettings);
+            SendEmailToUser(model.Email, regManager.GetSettings());
+            
+            return Redirect("/aspx/registration/thankyou");
+        }
+        catch(DatabaseException ex)
+        {
+            SystemInfo.Debug("Error in creating a new user for a new contact registration {0}: {1}", model.Id, ex.Message);
+            return RedirectToError(CustomLabels.Registration_ErrorCreatingUser?? "");
+        }
+	}
+	
+	// creating lead for exisiting contact
+	[HttpPost]
+	public ActionResponse SubmitSignupExistingLead(Lead model)
+	{
+	    if (!ModelState.IsValid) 
+	        return View(ActivePages.RegistrationExistingContact,model);
+ 
+	    try
+	    {
+	        var regManager = GetRegistrationManager();
+	        var regManagerSettings = regManager.GetSettings();
+	        
+    	    model.LeadSource = regManagerSettings.LeadSource;
+	        Create(model, new { SystemMode = true });
+
+    	    SendEmail(model, regManager.GetSettings());
+	        SendEmailToUser(model.Email, regManager.GetSettings());
+	        
+	        return Redirect("/aspx/registration/thankyou");
+	    }
+	    catch(DatabaseException ex)
+	    {
+	        UpdateModelState(ex);
+	        SystemInfo.Debug("Error: SubmitSignupExistingLead - Lead cannot be created. {0}", ex.Message);
+	        return View(ActivePages.RegistrationExistingContact, model);
+	    }
+	}
+	
+	public ActionResponse ThankYou()
+	{
+	    return View(ActivePages.RegistrationConfirmationMessage);
+	}
+	
+	private void SendEmail(Contact model, RegistrationSetting settings) 
+    {
+        if (!settings.NotifyAdministrator || IsEmpty(settings.AdministratorContactEmailTemplateId))
+            return;
+            
+        var emailList = settings.GetAdminEmails();
+        if (emailList.Count==0) 
+            return;
+        
+        using (EmailManager mailManager = new EmailManager())
+	    {
+           var message = EmailManager.CreateEmail(settings.AdministratorContactEmailTemplateId, model);
+           foreach(var email in emailList)
+           {
+               if (EmailAttribute.IsValidEmail(email)) message.To.Add(new System.Net.Mail.MailAddress(email));
+           }
+           mailManager.SendEmail(message);
+	    }
+    }	
+    
+    private void SendEmail(Lead model, RegistrationSetting settings) 
+    {
+        if (!settings.NotifyAdministrator || IsEmpty(settings.AdministratorLeadEmailTemplateId))
+            return;
+            
+        var emailList = settings.GetAdminEmails();
+        if (emailList.Count==0) 
+            return;
+        
+        using (EmailManager mailManager = new EmailManager())
+	    {
+           var message = EmailManager.CreateEmail(settings.AdministratorLeadEmailTemplateId, model);
+           foreach(var email in emailList)
+           {
+               if (EmailAttribute.IsValidEmail(email)) message.To.Add(new System.Net.Mail.MailAddress(email));
+           }
+           mailManager.SendEmail(message);
+	    }
+    }	
+    
+    private void SendEmailToUser(string userEmail, RegistrationSetting settings) 
+    {
+        if (!settings.SendConfirmationEmail || IsEmpty(settings.ConfirmationEmailTemplateId))
+            return;
+        
+        using (EmailManager mailManager = new EmailManager())
+	    {
+           var message = EmailManager.CreateEmail(settings.ConfirmationEmailTemplateId, userEmail);
+            
+           if (EmailAttribute.IsValidEmail(userEmail)) message.To.Add(new System.Net.Mail.MailAddress(userEmail));
+           
+           mailManager.SendEmail(message);
+	    }
+    }	
+	
+	public static ContactResponseObject GetContact(string Email, RegistrationDefaultManager regManager)
+	{
+	    var contactResponseObject = new ContactResponseObject { Success = false };
+
+        var contacts = regManager.GetContact(Email);
+        
+        if(contacts.Count == 1)
+        {
+            contactResponseObject.Success = true;
+            contactResponseObject.Contact = contacts[0];
+        }
+        
+        return contactResponseObject;
+	}
+	
+    public static ResponseObject GetAccounts(string email, RegistrationDefaultManager regManager)
+	{
+	    var responseObject = new ResponseObject { Success = true };
+	    
+	    // get the domain from email
+        string domain = string.Format("{0}", (email.Split('@')[1]??"").ToLower());
+        
+        //validate the domain, personal email domains are not accepted.
+        List<string> badDomains = GetBadDomains();
+        if (badDomains.Contains(domain))
+        {
+            responseObject.Success = false;
+            return responseObject;
+        }
+        
+        var matchingAccounts = regManager.GetAccountsByEmail(domain);
+
+        responseObject.Message = "ShowOptions";
+        responseObject.Accounts = matchingAccounts.OrderBy(a => a.Name).ToList();
+        return responseObject;
+	}
+	
+	private RegistrationDefaultManager GetRegistrationManager()
+	{
+	    var regManagers = Common.GetInstancesOf<RegistrationDefaultManager>();
+        var regManager = new RegistrationDefaultManager();
+        
+        if (regManagers.Count > 0)
+        {
+            if (regManagers.Count > 1)
+            {
+                //throw model validation exception
+                throw new ModelValidationException("More than one Registration Manager is provided.");
+            }
+            regManager = regManagers.FirstOrDefault();
+        }
+        
+        return regManager;
+	}
+	
+	private static List<string> GetBadDomains()
+    {
+        List<string> badDomains = new List<string>() { 
+                        /* Default domains included */
+                        "aol.com", "att.net", "comcast.net", "facebook.com", "gmail.com", "gmx.com", "googlemail.com",
+                        "google.com", "hotmail.com", "hotmail.co.uk", "mac.com", "me.com", "mail.com", "msn.com",
+                        "live.com", "sbcglobal.net", "verizon.net", "yahoo.com", "yahoo.co.uk", "yahoo.ca",
+                        
+                        /* Other global domains */
+                        "email.com", "fastmail.fm", "games.com" /* AOL */, "gmx.net", "hush.com", "hushmail.com", "icloud.com",
+                        "iname.com", "inbox.com", "lavabit.com", "love.com" /* AOL */, "outlook.com", "pobox.com", "protonmail.com",
+                        "rocketmail.com" /* Yahoo */, "safe-mail.net", "wow.com" /* AOL */, "ygm.com" /* AOL */,
+                        "ymail.com" /* Yahoo */, "zoho.com", "yandex.com",
+                       
+                        /* United States ISP domains */
+                        "bellsouth.net", "charter.net", "cox.net", "earthlink.net", "juno.com",
+                        
+                        /* British ISP domains */
+                        "btinternet.com", "virginmedia.com", "blueyonder.co.uk", "freeserve.co.uk", "live.co.uk",
+                        "ntlworld.com", "o2.co.uk", "orange.net", "sky.com", "talktalk.co.uk", "tiscali.co.uk",
+                        "virgin.net", "wanadoo.co.uk", "bt.com",
+                        
+                        /* Domains used in Asia */
+                        "sina.com", "sina.cn", "qq.com", "naver.com", "hanmail.net", "daum.net", "nate.com", "yahoo.co.jp", "yahoo.co.kr", "yahoo.co.id", "yahoo.co.in", "yahoo.com.sg", "yahoo.com.ph", "163.com", "126.com", "aliyun.com", "foxmail.com",
+                    
+                        /* French ISP domains */
+                        "hotmail.fr", "live.fr", "laposte.net", "yahoo.fr", "wanadoo.fr", "orange.fr", "gmx.fr", "sfr.fr", "neuf.fr", "free.fr",
+                    
+                        /* German ISP domains */
+                        "gmx.de", "hotmail.de", "live.de", "online.de", "t-online.de" /* T-Mobile */, "web.de", "yahoo.de",
+                    
+                        /* Italian ISP domains */
+                        "libero.it", "virgilio.it", "hotmail.it", "aol.it", "tiscali.it", "alice.it", "live.it", "yahoo.it", "email.it", "tin.it", "poste.it", "teletu.it",
+                    
+                        /* Russian ISP domains */
+                        "mail.ru", "rambler.ru", "yandex.ru", "ya.ru", "list.ru",
+                    
+                        /* Belgian ISP domains */
+                        "hotmail.be", "live.be", "skynet.be", "voo.be", "tvcablenet.be", "telenet.be",
+                    
+                        /* Argentinian ISP domains */
+                        "hotmail.com.ar", "live.com.ar", "yahoo.com.ar", "fibertel.com.ar", "speedy.com.ar", "arnet.com.ar",
+                    
+                        /* Domains used in Mexico */
+                        "yahoo.com.mx", "live.com.mx", "hotmail.es", "hotmail.com.mx", "prodigy.net.mx",
+                    
+                        /* Domains used in Brazil */
+                        "yahoo.com.br", "hotmail.com.br", "outlook.com.br", "uol.com.br", "bol.com.br", "terra.com.br", "ig.com.br", "itelefonica.com.br", "r7.com", "zipmail.com.br", "globo.com", "globomail.com", "oi.com.br"
+                    };
+                    
+        return badDomains;
+    }
+	
+    public class ResponseObject
+    {
+        public string Message { get; set; }
+        public bool Success { get; set; }
+        public List<Account> Accounts { get; set; }
+    }
+    
+    public class ContactResponseObject
+    {
+        public bool Success { get; set; }
+        public Contact Contact { get; set; }
+    }
+    
+}

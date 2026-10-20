@@ -1,0 +1,10 @@
+public class TestController : AspxController
+{
+	public override ActionResponse Index()
+	{
+	    var connection = new Opirus.HS.HubSpotConnection("HubSpot"); 
+	    var token = connection.GetOAuthAccessToken();
+	    
+		return Content(token);
+	}
+}
